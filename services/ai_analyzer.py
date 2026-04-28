@@ -226,86 +226,102 @@ class AIAnalyzer:
                         buffer = ""
                         collected_messages = []
                         chunk_count = 0
-                        
+                        line_buffer = ""
+
+                        async def process_sse_line(line: str, *, log_decode_error_as_debug: bool = False):
+                            nonlocal buffer, chunk_count
+
+                            line = line.strip()
+                            if not line:
+                                return None
+
+                            if line.startswith("data: "):
+                                line = line[6:]
+
+                            if line == "[DONE]":
+                                logger.debug("收到流结束标记 [DONE]")
+                                return None
+
+                            try:
+                                chunk_data = json.loads(line)
+                            except json.JSONDecodeError:
+                                if log_decode_error_as_debug:
+                                    logger.debug(f"行缓冲区剩余数据无法解析: {line[:200]}")
+                                else:
+                                    logger.error(f"JSON解析错误，块内容: {line}")
+
+                                if "streaming failed after retries" in line.lower():
+                                    logger.error("检测到流式传输失败")
+                                    return json.dumps({
+                                        "stock_code": stock_code,
+                                        "error": "流式传输失败，请稍后重试",
+                                        "status": "error"
+                                    })
+                                return None
+
+                            error_data = chunk_data.get("error")
+                            if error_data is not None:
+                                logger.error(f"流式响应中收到错误: {error_data}")
+                                return json.dumps({
+                                    "stock_code": stock_code,
+                                    "error": f"流式响应错误: {error_data}",
+                                    "status": "error"
+                                })
+
+                            choices = chunk_data.get("choices") or [{}]
+                            finish_reason = choices[0].get("finish_reason")
+                            if finish_reason == "stop":
+                                logger.debug("收到finish_reason=stop，流结束")
+                                return None
+
+                            delta = choices[0].get("delta", {})
+                            if not delta:
+                                logger.debug("收到空的delta对象，跳过")
+                                return None
+
+                            content = delta.get("content", "")
+                            if not content:
+                                return None
+
+                            chunk_count += 1
+                            buffer += content
+                            collected_messages.append(content)
+                            return json.dumps({
+                                "stock_code": stock_code,
+                                "ai_analysis_chunk": content,
+                                "status": "analyzing"
+                            })
+
                         async for chunk in response.aiter_text():
-                            if chunk:
-                                # 分割多行响应（处理某些API可能在一个chunk中返回多行）
-                                lines = chunk.strip().split('\n')
-                                for line in lines:
-                                    line = line.strip()
-                                    if not line:
-                                        continue
-                                        
-                                    # 处理以data:开头的行
-                                    if line.startswith("data: "):
-                                        line = line[6:]  # 去除"data: "前缀
-                                     
-                                    if line == "[DONE]":
-                                        logger.debug("收到流结束标记 [DONE]")
-                                        continue
-                                        
-                                    try:
-                                        # 处理特殊错误情况
-                                        if "error" in line.lower():
-                                            error_msg = line
-                                            try:
-                                                error_data = json.loads(line)
-                                                error_msg = error_data.get("error", line)
-                                            except:
-                                                pass
-                                            
-                                            logger.error(f"流式响应中收到错误: {error_msg}")
-                                            yield json.dumps({
-                                                "stock_code": stock_code,
-                                                "error": f"流式响应错误: {error_msg}",
-                                                "status": "error"
-                                            })
-                                            continue
-                                        
-                                        # 尝试解析JSON
-                                        chunk_data = json.loads(line)
-                                        
-                                        # 检查是否有finish_reason
-                                        finish_reason = chunk_data.get("choices", [{}])[0].get("finish_reason")
-                                        if finish_reason == "stop":
-                                            logger.debug("收到finish_reason=stop，流结束")
-                                            continue
-                                        
-                                        # 获取delta内容
-                                        delta = chunk_data.get("choices", [{}])[0].get("delta", {})
-                                        
-                                        # 检查delta是否为空对象
-                                        if not delta or delta == {}:
-                                            logger.debug("收到空的delta对象，跳过")
-                                            continue
-                                        
-                                        content = delta.get("content", "")
-                                        
-                                        if content:
-                                            chunk_count += 1
-                                            buffer += content
-                                            collected_messages.append(content)
-                                            
-                                            # 直接发送每个内容片段，不累积
-                                            yield json.dumps({
-                                                "stock_code": stock_code,
-                                                "ai_analysis_chunk": content,
-                                                "status": "analyzing"
-                                            })
-                                    except json.JSONDecodeError:
-                                        # 记录解析错误并尝试恢复
-                                        logger.error(f"JSON解析错误，块内容: {line}")
-                                        
-                                        # 如果是特定错误模式，处理它
-                                        if "streaming failed after retries" in line.lower():
-                                            logger.error("检测到流式传输失败")
-                                            yield json.dumps({
-                                                "stock_code": stock_code,
-                                                "error": "流式传输失败，请稍后重试",
-                                                "status": "error"
-                                            })
-                                            return
-                                        continue
+                            if not chunk:
+                                continue
+
+                            line_buffer += chunk
+
+                            # 按换行分割，最后一段可能不完整，保留在buffer中
+                            parts = line_buffer.split('\n')
+                            line_buffer = parts[-1]
+                            lines = parts[:-1]
+
+                            for line in lines:
+                                processed_chunk = await process_sse_line(line)
+                                if processed_chunk:
+                                    yield processed_chunk
+                                    processed_data = json.loads(processed_chunk)
+                                    if processed_data.get("status") == "error":
+                                        return
+
+                        # 处理line_buffer中剩余的数据
+                        if line_buffer.strip():
+                            processed_chunk = await process_sse_line(
+                                line_buffer,
+                                log_decode_error_as_debug=True
+                            )
+                            if processed_chunk:
+                                yield processed_chunk
+                                processed_data = json.loads(processed_chunk)
+                                if processed_data.get("status") == "error":
+                                    return
                         
                         logger.info(f"AI流式处理完成，共收到 {chunk_count} 个内容片段，总长度: {len(buffer)}")
                         
@@ -350,7 +366,8 @@ class AIAnalyzer:
                         return
                     
                     response_data = response.json()
-                    analysis_text = response_data.get("choices", [{}])[0].get("message", {}).get("content", "")
+                    choices = response_data.get("choices") or [{}]
+                    analysis_text = choices[0].get("message", {}).get("content", "")
                     
                     # 尝试从分析内容中提取投资建议
                     recommendation = self._extract_recommendation(analysis_text)

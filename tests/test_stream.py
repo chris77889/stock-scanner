@@ -1,12 +1,7 @@
 import os
 import requests
 import json
-from utils.logger import get_logger
-from dotenv import load_dotenv
-from utils.api_utils import APIUtils
-
-# 获取日志器
-logger = get_logger()
+import pytest
 
 
 def _truncate_json_for_logging(json_obj, max_length=500):
@@ -28,10 +23,18 @@ def _truncate_json_for_logging(json_obj, max_length=500):
         return json_str
     return json_str[:max_length] + f"... [截断，总长度: {len(json_str)}字符]"
 
+@pytest.mark.integration
 def test_api_stream():
     """
     测试API流式响应功能
     """
+    from dotenv import load_dotenv
+
+    from utils.api_utils import APIUtils
+    from utils.logger import get_logger
+
+    logger = get_logger()
+
     # 加载环境变量
     load_dotenv()
     

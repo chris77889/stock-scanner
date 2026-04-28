@@ -1,12 +1,12 @@
-import akshare as ak
+import pytest
 
-print(f"akshare version: {ak.__version__}")
-# df = ak.stock_zh_a_hist(symbol="000858", 
-#                         start_date="20250301", 
-#                         end_date="20250310", 
-#                         adjust="qfq")
-# print(df)
 
-stock_us_daily_df = ak.stock_us_daily(symbol="AAPL", adjust="qfq")
+pytestmark = pytest.mark.integration
 
-print(stock_us_daily_df)
+
+def test_akshare_us_daily_fetches_data():
+    ak = pytest.importorskip("akshare")
+    df = ak.stock_us_daily(symbol="AAPL", adjust="qfq")
+
+    assert df is not None
+    assert not df.empty
