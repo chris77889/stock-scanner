@@ -1,6 +1,7 @@
 import pandas as pd
 from datetime import datetime, timedelta
 import asyncio
+import time
 from typing import Dict, List, Optional, Tuple, Any
 from utils.logger import get_logger
 
@@ -16,6 +17,19 @@ class StockDataProvider:
     def __init__(self):
         """初始化数据提供者服务"""
         logger.debug("初始化StockDataProvider")
+    
+    def _retry_call(self, func, label: str, retries: int = 3, delay: float = 1.5):
+        """带重试的数据获取包装器，处理瞬态网络错误"""
+        for attempt in range(retries):
+            try:
+                return func()
+            except Exception as e:
+                if attempt < retries - 1:
+                    wait = delay * (attempt + 1)
+                    logger.warning(f"{label} 第{attempt + 1}次请求失败: {e}，{wait:.1f}秒后重试")
+                    time.sleep(wait)
+                else:
+                    raise
     
     async def get_stock_data(self, stock_code: str, market_type: str = 'A', 
                             start_date: Optional[str] = None, 
@@ -65,18 +79,21 @@ class StockDataProvider:
             if market_type == 'A':
                 logger.debug(f"获取A股数据: {stock_code}")
                 
-                df = ak.stock_zh_a_hist(
-                    symbol=stock_code,
-                    start_date=start_date,
-                    end_date=end_date,
-                    adjust="qfq"
+                df = self._retry_call(
+                    lambda: ak.stock_zh_a_hist(
+                        symbol=stock_code,
+                        start_date=start_date,
+                        end_date=end_date,
+                        adjust="qfq"
+                    ),
+                    f"A股 {stock_code}"
                 )
                 
             elif market_type in ['HK']:
                 logger.debug(f"获取港股数据: {stock_code}")
-                df = ak.stock_hk_daily(
-                    symbol=stock_code,
-                    adjust="qfq"
+                df = self._retry_call(
+                    lambda: ak.stock_hk_daily(symbol=stock_code, adjust="qfq"),
+                    f"港股 {stock_code}"
                 )
                 
                 # 在获取数据后进行日期过滤
@@ -119,9 +136,9 @@ class StockDataProvider:
             elif market_type in ['US']:
                 logger.debug(f"获取美股数据: {stock_code}")
                 try:
-                    df = ak.stock_us_daily(
-                        symbol=stock_code,
-                        adjust="qfq"
+                    df = self._retry_call(
+                        lambda: ak.stock_us_daily(symbol=stock_code, adjust="qfq"),
+                        f"美股 {stock_code}"
                     )
                     logger.debug(f"美股数据原始列: {df.columns.tolist()}")
                     logger.debug(f"美股数据形状: {df.shape}")
@@ -186,17 +203,23 @@ class StockDataProvider:
                     
             elif market_type in ['ETF']:
                 logger.debug(f"获取{market_type}基金数据: {stock_code}")
-                df = ak.fund_etf_hist_em(
-                    symbol=stock_code,
-                    start_date=start_date.replace('-', ''),
-                    end_date=end_date.replace('-', '')
+                df = self._retry_call(
+                    lambda: ak.fund_etf_hist_em(
+                        symbol=stock_code,
+                        start_date=start_date.replace('-', ''),
+                        end_date=end_date.replace('-', '')
+                    ),
+                    f"ETF {stock_code}"
                 )
             elif market_type in ['LOF']:
                 logger.debug(f"获取{market_type}基金数据: {stock_code}")
-                df = ak.fund_lof_hist_em(
-                    symbol=stock_code,
-                    start_date=start_date.replace('-', ''),
-                    end_date=end_date.replace('-', '')
+                df = self._retry_call(
+                    lambda: ak.fund_lof_hist_em(
+                        symbol=stock_code,
+                        start_date=start_date.replace('-', ''),
+                        end_date=end_date.replace('-', '')
+                    ),
+                    f"LOF {stock_code}"
                 )
                 
             else:
