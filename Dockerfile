@@ -1,5 +1,5 @@
 # 阶段一: 构建Vue前端
-FROM node:18-alpine as frontend-builder
+FROM node:18-alpine AS frontend-builder
 
 # 设置工作目录
 WORKDIR /app/frontend
@@ -17,14 +17,14 @@ COPY frontend/ ./
 RUN npm run build
 
 # 阶段二: 构建Python后端
-FROM python:3.10-slim as backend-builder
+FROM python:3.10-slim AS backend-builder
 
 # 设置工作目录
 WORKDIR /app
 
 # 安装系统依赖和构建依赖
 RUN apt-get update && apt-get install -y \
-    libgl1-mesa-glx \
+    libgl1 \
     ca-certificates \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
@@ -43,8 +43,9 @@ WORKDIR /app
 
 # 安装运行时依赖
 RUN apt-get update && apt-get install -y \
-    libgl1-mesa-glx \
+    libgl1 \
     ca-certificates \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # 从构建阶段复制Python依赖
